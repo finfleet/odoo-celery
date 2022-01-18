@@ -2,6 +2,9 @@
 # License LGPL-3.0 or later (http://www.gnu.org/licenses/lgpl.html)
 
 import copy
+import os
+
+# from odoo.tools.config import configmanager as config
 
 from celery import Celery
 from celery.contrib import rdb
@@ -33,7 +36,11 @@ class RunTaskFailure(TaskError):
     """Error from rpc_run_task in Odoo."""
 
 
-app = Celery('odoo.addons.celery', broker='amqp://odoo:odoo@rabbitmq:5672')
+broker_hostname = (os.environ.get(
+    'ODOO_CELERY_BROKER_HOSTNAME') or 'localhost')
+
+app = Celery('odoo.addons.celery',
+             broker='amqp://odoo:odoo@%s:5672' % (broker_hostname))
 
 
 @app.task(name='odoo.addons.celery.odoo.call_task', bind=True)
