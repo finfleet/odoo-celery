@@ -28,11 +28,13 @@ RETRY_COUNTDOWN_MULTIPLY_RETRIES_SECCONDS = 'MUL_RETRIES_SECS'
 class TaskNotFoundInOdoo(TaskError):
     """The task doesn't exist (anymore) in Odoo (Celery Task model)."""
 
+
 class RunTaskFailure(TaskError):
     """Error from rpc_run_task in Odoo."""
 
 
-app = Celery('odoo.addons.celery')
+app = Celery('odoo.addons.celery', broker='amqp://guest:guest@rabbitmq/byru')
+
 
 @app.task(name='odoo.addons.celery.odoo.call_task', bind=True)
 def call_task(self, url, db, user_id, task_uuid, model, method, **kwargs):
@@ -64,7 +66,8 @@ def call_task(self, url, db, user_id, task_uuid, model, method, **kwargs):
             '- args: {args}\n'
             '- kwargs {kwargs}\n'.format(
                 url=url, db=db, user_id=user_id, task_uuid=task_uuid, model=model, method=method, args=args, kwargs=_kwargs))
-        response = odoo.execute_kw(db, user_id, password, 'celery.task', 'rpc_run_task', args, _kwargs)
+        response = odoo.execute_kw(
+            db, user_id, password, 'celery.task', 'rpc_run_task', args, _kwargs)
 
         if (isinstance(response, tuple) or isinstance(response, list)) and len(response) == 2:
             code = response[0]
@@ -79,9 +82,12 @@ def call_task(self, url, db, user_id, task_uuid, model, method, **kwargs):
         elif code in (STATE_RETRY, STATE_FAILURE):
             retry = celery_params.get('retry')
             countdown = celery_params.get('countdown', 1)
-            retry_countdown_setting = celery_params.get('retry_countdown_setting')
-            retry_countdown_add_seconds = celery_params.get('retry_countdown_add_seconds', 0)
-            retry_countdown_multiply_retries_seconds = celery_params.get('retry_countdown_multiply_retries_seconds', 0)
+            retry_countdown_setting = celery_params.get(
+                'retry_countdown_setting')
+            retry_countdown_add_seconds = celery_params.get(
+                'retry_countdown_add_seconds', 0)
+            retry_countdown_multiply_retries_seconds = celery_params.get(
+                'retry_countdown_multiply_retries_seconds', 0)
 
             # (Optionally) increase the countdown either by:
             # - add seconds
@@ -93,30 +99,32 @@ def call_task(self, url, db, user_id, task_uuid, model, method, **kwargs):
                 elif retry_countdown_setting == RETRY_COUNTDOWN_MULTIPLY_RETRIES:
                     countdown = countdown * self.request.retries
                 elif retry_countdown_setting == RETRY_COUNTDOWN_MULTIPLY_RETRIES_SECCONDS \
-                     and retry_countdown_multiply_retries_seconds > 0:
+                        and retry_countdown_multiply_retries_seconds > 0:
                     countdown = self.request.retries * retry_countdown_multiply_retries_seconds
             celery_params['countdown'] = countdown
-            
+
             if retry:
                 msg = 'Retry task... Failure in Odoo {db} (task: {uuid}, model: {model}, method: {method}).'.format(
                     db=db, uuid=task_uuid, model=model, method=method)
                 logger.info(msg)
 
                 # Notify the worker to retry.
-                logger.info('{task_name} retry params: {params}'.format(task_name=self.name, params=celery_params))
+                logger.info('{task_name} retry params: {params}'.format(
+                    task_name=self.name, params=celery_params))
                 _kwargsrepr['_password'] = '*****'
                 _kwargsrepr = repr(_kwargsrepr)
                 raise self.retry(kwargsrepr=_kwargsrepr, **celery_params)
             else:
                 msg = 'Exit task... Failure in Odoo {db} (task: {uuid}, model: {model}, method: {method})\n'\
-                      '  => Check task log/info in Odoo'.format(db=db, uuid=task_uuid, model=model, method=method)
+                      '  => Check task log/info in Odoo'.format(
+                          db=db, uuid=task_uuid, model=model, method=method)
                 logger.info(msg)
         else:
             return (code, result)
     except Exception as e:
         """ A rather picky workaround to ignore/silence following exceptions.
         Only logs in case of other Exceptions.
-        
+
         This also prevents concurrent retries causing troubles like
         concurrent DB updates (shall rollback) etc.
 
@@ -140,7 +148,8 @@ def call_task(self, url, db, user_id, task_uuid, model, method, **kwargs):
             logger.error(msg)
             # Task is probably in state RETRY. Now set it to FAILURE.
             args = [task_uuid, 'FAILURE']
-            odoo.execute_kw(db, user_id, password, 'celery.task', 'rpc_set_state', args)
+            odoo.execute_kw(db, user_id, password,
+                            'celery.task', 'rpc_set_state', args)
         elif not isinstance(e, Retry):
             # Maybe there's a also a way the store a xmlrpc.client.Fault into the Odoo exc_info field e.g.:
             # args = [xmlrpc_client.Fault.faultCode, xmlrpc_client.Fault.faultString]
@@ -148,6 +157,7 @@ def call_task(self, url, db, user_id, task_uuid, model, method, **kwargs):
             #
             # Necessary to implement/call a retry() for other exceptions ?
             msg = '{exception}\n'\
-                  '  => SUGGESTIONS: Check former XML-RPC log messages.\n'.format(exception=e)
+                  '  => SUGGESTIONS: Check former XML-RPC log messages.\n'.format(
+                      exception=e)
             logger.error(msg)
             raise e
